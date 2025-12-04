@@ -3,10 +3,13 @@ from typing import TypedDict, List, Dict, Any
 from langgraph.types import interrupt, Command
 from langgraph.checkpoint.memory import MemorySaver
 
+
+
 from my_json import proceedure_json
 from actions import action
 from human_input import human_call
 from response_statement import response_statement
+from action_agents import build_agent
 
 
 # --- STATE ---
@@ -39,9 +42,15 @@ def handle_ask_user(state: State):
 
 
 def handle_api_call(state: State):
-    out = action()
+    current_step = state["steps"][state["step_index"]]
+    
+    # Get action_id from JSON
+    action_id = current_step.get("action_id")
+
+    out = action(action_id)
+    build_agent(out)
     return {
-        "api_output": out, 
+        "api_output": out,
         "step_index": state["step_index"] + 1
     }
 

@@ -10,7 +10,8 @@ proceedure_json = {
             "action": "fetch_orders",
             "parameters": {
                 "email_id": "<user_provided_email>"
-            }
+            },
+            "action_id": "cb2d6ce9-6a13-4a08-93ac-da0903387210"
         },
         {
             "type": "ASK_USER",
