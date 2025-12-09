@@ -42,8 +42,11 @@ def build_tool_from_json(tool_data: dict) -> StructuredTool:
     params_dict = {}
 
     for p in tool_data.get("parameters", []):
-        field_name = p.get("name")
-        field_type = p.get("type", "str")
+        raw_name = p.get("name", "")
+        raw_type = p.get("type", "str")
+
+        field_name = raw_name.strip()        # <-- FIX
+        field_type = raw_type.strip()
 
         # SAFE TYPE LOOKUP
         python_type = TYPE_MAP.get(field_type, str)
@@ -137,6 +140,9 @@ def build_tool_from_json(tool_data: dict) -> StructuredTool:
                 "message": str(e),
                 "data": []
             }
+    print("Registered tool name:", tool_name)
+    print("Schema fields:", DynamicSchema.model_fields.keys())
+
 
     # ------------------- 4) Build final tool object -------------------
     return StructuredTool(
@@ -148,12 +154,9 @@ def build_tool_from_json(tool_data: dict) -> StructuredTool:
 
 
 def create_tool_retriever(action_id):
-    # Fetch actions from DB (cursor)
     cursor = get_actions_collection(action_id)
-
-    # Convert cursor → list
     tool_docs = list(cursor)
-    logging.info(f"Tools fetched from DB: {len(tool_docs)}")
+    logging.info(f"Tools fetched: {len(tool_docs)}")
 
     tools = []
     for doc in tool_docs:
@@ -163,7 +166,9 @@ def create_tool_retriever(action_id):
 
     return tools
 
+
 def action(action_id):
     print("This is an action function.")
     tools_builder = create_tool_retriever(action_id)
     print(f"Number of tools created: {len(tools_builder)}")
+    return tools_builder[0] if tools_builder else None
