@@ -11,6 +11,16 @@ from human_input import human_call
 from response_statement import response_statement
 from action_agents import llm
 
+from custom_mongodb_saver import MongoDBSaver
+import os
+import dotenv
+dotenv.load_dotenv()
+
+
+checkpointer = MongoDBSaver(
+    uri=os.getenv("MONGODB_ATLAS_URI"),
+    db_name="cx_prod"
+)
 
 # --- STATE ---
 class State(TypedDict):
@@ -177,7 +187,6 @@ graph.add_edge("final", END)
 graph.set_entry_point("entry_node")
 
 # COMPILE with checkpointer
-checkpointer = MemorySaver()
 workflow = graph.compile(checkpointer=checkpointer)
 
 
