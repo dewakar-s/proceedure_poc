@@ -4,21 +4,23 @@ from langgraph.types import interrupt, Command
 from langgraph.checkpoint.memory import MemorySaver
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
+from langgraph.checkpoint.mongodb import MongoDBSaver
+from pymongo import MongoClient
 
-from my_json import curd_operations
+from my_json import curd_operations, proceedure_json
 from actions import action
 from human_input import human_call
 from response_statement import response_statement
 from action_agents import llm
 
-from custom_mongodb_saver import MongoDBSaver
 import os
 import dotenv
 dotenv.load_dotenv()
 
+client = MongoClient(os.getenv("MONGODB_ATLAS_URI"))
 
 checkpointer = MongoDBSaver(
-    uri=os.getenv("MONGODB_ATLAS_URI"),
+    client=client,
     db_name="cx_prod"
 )
 
@@ -197,7 +199,7 @@ def run_workflow():
 
     initial_state = {
         "step_index": 0,
-        "steps": curd_operations["steps"],
+        "steps": proceedure_json["steps"],
         "user_input": None,
         "api_output": None,
         "final_response": None,
