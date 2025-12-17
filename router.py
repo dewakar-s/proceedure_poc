@@ -1,15 +1,13 @@
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, List, Dict, Any
 from langgraph.types import interrupt, Command
-from langgraph.checkpoint.memory import MemorySaver
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate
 from langgraph.checkpoint.mongodb import MongoDBSaver
 from pymongo import MongoClient
 
-from my_json import curd_operations, proceedure_json
+from my_json import curd_operations, proceedure_json , sample_taken
 from actions import action
-from human_input import human_call
 from response_statement import response_statement
 from action_agents import llm
 
@@ -43,7 +41,7 @@ def entry(state: State):
 def handle_ask_user(state: State):
     """Handle user input steps"""
     current_step = state["steps"][state["step_index"]]
-    question= current_step.get("action")
+    question= current_step.get("message")
     question = current_step.get("question", question)
     
     # Trigger interrupt with the question
@@ -193,13 +191,13 @@ workflow = graph.compile(checkpointer=checkpointer)
 
 
 # --- RUN ---
-def run_workflow():
+def run_workflow(json):
     """Execute the workflow with interactive user input"""
     config = {"configurable": {"thread_id": "order_cancellation_session"}}
 
     initial_state = {
         "step_index": 0,
-        "steps": proceedure_json["steps"],
+        "steps": json["steps"],
         "user_input": None,
         "api_output": None,
         "final_response": None,
@@ -262,4 +260,4 @@ def run_workflow():
 
 
 if __name__ == "__main__":
-    run_workflow()
+    run_workflow(sample_taken)

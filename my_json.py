@@ -8,9 +8,6 @@ proceedure_json = {
         {
             "type": "API_CALL",
             "action": "fetch_orders",
-            "parameters": {
-                "email_id": "<user_provided_email>"
-            },
             "action_id": "cb2d6ce9-6a13-4a08-93ac-da0903387210"
         },
         {
@@ -21,9 +18,7 @@ proceedure_json = {
         {
             "type": "API_CALL",
             "action": "cancel_order",
-            "parameters": {
-                "order_id": "<user_selected_order_id>"
-            }
+    
         },
         {
             "type": "RESPOND_FINAL",
@@ -47,10 +42,6 @@ curd_operations = {
     {
       "type": "API_CALL",
       "action": "create_user",
-      "parameters": {
-        "name": "<user_provided_name>",
-        "age": "<user_provided_age>"
-      },
       "action_id": "c8a99e10-9572-4696-aecd-ee2269a603fd"
     },
     {
@@ -61,9 +52,6 @@ curd_operations = {
     {
       "type": "API_CALL",
       "action": "get_user",
-      "parameters": {
-        "user_id": "<user_provided_user_id>"
-      },
       "action_id": "e1cc0241-5dd9-4d4f-bb92-e74b9fdafb49"
     },
     {
@@ -71,4 +59,39 @@ curd_operations = {
       "message": "User creation and lookup process completed successfully!"
     }
   ]
+}
+
+sample_taken ={
+    "steps": [
+        {
+            "type": "ASK_USER",
+            "action": "ask_name",
+            "message": "Please enter your name."
+        },
+        {
+            "type": "ASK_USER",
+            "action": "ask_age",
+            "message": "Please enter your age."
+        },
+        {
+            "type": "API_CALL",
+            "action": "create_user",
+            "action_id": "c8a99e10-9572-4696-aecd-ee2269a603fd"
+        },
+        {
+            "type": "ASK_USER",
+            "action": "ask_user_id",
+            "message": "Please enter the user ID to fetch details."
+        },
+        {
+            "type": "API_CALL",
+            "action": "fetch_user_info",
+            "action_id": "e1cc0241-5dd9-4d4f-bb92-e74b9fdafb49"
+        },
+        {
+            "type": "RESPOND_FINAL",
+            "action": "display_user_info",
+            "message": "User information retrieved successfully."
+        }
+    ]
 }

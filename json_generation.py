@@ -4,6 +4,9 @@ from langchain.tools import StructuredTool
 from mongodb_utils import  embeddings, collection_procedure 
 from langchain_openai import AzureChatOpenAI
 import os
+import re
+import json
+from router import run_workflow
 
 AZURE_API_KEY = os.getenv("AZURE_OPENAI_KEY")
 AZURE_ENDPOINT = os.getenv("ENDPOINT_URL")
@@ -50,30 +53,29 @@ def generate_plan(user_query,tenant_id):
 
     # 2. Send to LLM along with user query
     planning_prompt = f"""
-    You are an **Execution Plan Optimizer**. Your task is to generate the most efficient, structured JSON plan based on the user's request and the Procedure Blueprint.
-
-    1. **Optimization Rule (CRITICAL: Skip and Inject):**
-        a. **SKIP:** If the 'User Query' already contains a piece of required information (e.g., email ID, order ID, or any value mentioned in a 'required_info' field of the blueprint), you **MUST OMIT** the corresponding 'ASK_USER' step from the final JSON plan.
-        b. **INJECT:** You must then **INJECT** the value directly from the 'User Query' into the 'parameters' of the next subsequent 'API_CALL' step, replacing the placeholder value (e.g., '<user_provided_email>'). You must deduce the parameter name (e.g., 'email_id') from the context.
-    
-    2. **Required Schema:** The output MUST be a JSON object with a single 'steps' array. Each step must use one of these types: 'API_CALL', 'ASK_USER', or 'RESPOND_FINAL'.
-    
-    3. **Blueprint Analysis:** You must parse the steps from the 'Procedure Blueprint' and apply the optimization rule.
-
-    ---
-    User Query (Analyze this for pre-filled data, e.g., 'dewasrfhh@gmail.com'):
-    {user_query}
-    ---
-    
-    Procedure Blueprint (Describes the required sequence of API calls and data gathering, assumed to be in a machine-readable format like the one provided by the user in the past):
-    {procedure_text}
-    ---
-    
-    Generate the FINAL, optimized JSON plan below:
+You are an expert at creating step-by-step execution plans based on user requests and predefined procedures.
+The execution plan should contain all steps mentioned in the data each step should contain three fields: type, action, and message/action_id as applicable.
+And the produce text is 
+{procedure_text}
+The output should be in json format 
+IT Must contain tyoe API_CALL , ASK_USER , RESPOND_FINAL
+Second what kind of action it is doing
+third should action_id present or else message to be shown to user
+Based on the above procedure, generate a detailed execution plan 
+do not give any explanation just provide json output
+there should be steps[] inside this array there should be multiple steps
     """
     response = llm.invoke(planning_prompt)  # LLM CALL ONCE
     return response.content
 
 
-answer = generate_plan("i want to cancel my order  ", "021ee120-7cc2-4f78-9ff5-db9e785c0118")
+answer = generate_plan("i want to create a user ", "a9a5bcdc-d607-4fc6-a0a0-2469b383af6b")
+
+def extract_json(text: str):
+    text = re.sub(r"```json|```", "", text).strip()
+    return json.loads(text)
+
 print("Generated Execution Plan:", answer)
+the_json = extract_json(answer)
+print(the_json)
+run_workflow(the_json)
