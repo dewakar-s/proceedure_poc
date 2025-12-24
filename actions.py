@@ -1,5 +1,5 @@
 import logging
-from mongodb_utilies import get_actions_collection
+from mongodb_utilies_actions import get_actions_collection
 from pydantic import BaseModel, Field, create_model
 from langchain.tools import StructuredTool
 import requests
