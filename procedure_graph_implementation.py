@@ -4,44 +4,35 @@ import time
 from typing import TypedDict, Annotated, Sequence, Optional, List, Dict, Any
 
 from langchain_openai import AzureChatOpenAI
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
+from langchain_core.messages import BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.mongodb import MongoDBSaver
+from langgraph.types import interrupt
 from pymongo import MongoClient
 
 from actions import action
 from mongodb_utilies_actions import MONGODB_ATLAS_URI
+from response_statement import response_statement
 
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# PROCEDURE GRAPH STATE
+# PROCEDURE GRAPH STATE (Matching Your Structure)
 # ============================================================================
 
 class ProcedureState(TypedDict):
-    """State for procedure graph - focused on step execution"""
-    messages: Annotated[Sequence[BaseMessage], "The messages in the conversation"]
-    session_id: str
-    tenant_id: str
-    
-    # Procedure execution state
-    in_procedure: bool
-    procedure_name: Optional[str]
-    procedure_steps: List[Dict[str, Any]]
+    """State matching your exact structure"""
     step_index: int
-    
-    # Step data
-    procedure_answers: List[str]
-    current_user_input: Optional[str]
-    last_api_output: Optional[str]
-    
-    # Flow control
-    waiting_for_input: bool
-    fallback_to_chat: bool
-    validation_attempts: int
+    steps: List[Dict[str, Any]]
+    user_input: Optional[str]
+    api_output: Optional[str]
+    final_response: Optional[str]
+    answers: List[str]
+    validation_failed: bool
+    original_user_message: Optional[str]
 
 # ============================================================================
 # LLM INITIALIZATION
@@ -63,94 +54,89 @@ llm = AzureChatOpenAI(
 mongo_client = MongoClient(MONGODB_ATLAS_URI)
 
 # ============================================================================
-# CONFIGURATION
+# PROCEDURE NODES
 # ============================================================================
 
-MAX_VALIDATION_ATTEMPTS = 2  # After 2 invalid inputs, fallback to chat
-
-# ============================================================================
-# PROCEDURE GRAPH NODES
-# ============================================================================
-
-def procedure_entry_node(state: ProcedureState) -> ProcedureState:
-    """Entry point - validates procedure state"""
-    logger.info(f"[ProcedureGraph] Entry for session: {state['session_id']}")
+def route_step(state: ProcedureState) -> str:
+    """Route to appropriate node based on current step"""
+    steps = state["steps"]
+    index = state["step_index"]
     
-    if not state.get('in_procedure'):
-        logger.warning(f"[ProcedureGraph] No active procedure, marking for fallback")
-        state['fallback_to_chat'] = True
+    # Check if all steps completed
+    if index >= len(steps):
+        logger.info(f"[ProcedureGraph] All steps completed, generating final response")
+        return "final_response"
     
-    return state
+    current_step = steps[index]
+    step_type = current_step.get("type")
+    
+    logger.info(f"[ProcedureGraph] Step {index}/{len(steps)}: {step_type}")
+    
+    if step_type == "ASK_USER":
+        return "ask_user"
+    elif step_type == "API_CALL":
+        return "api_call"
+    elif step_type == "RESPOND_FINAL":
+        return "final_response"
+    else:
+        logger.warning(f"[ProcedureGraph] Unknown step type: {step_type}, ending")
+        return "end"
 
 def ask_user_node(state: ProcedureState) -> ProcedureState:
-    """Handle ASK_USER step type"""
-    current_step = state['procedure_steps'][state['step_index']]
+    """
+    Handle ASK_USER step - asks question and waits for input
+    Uses interrupt() to pause execution
+    """
+    current_step = state["steps"][state["step_index"]]
     question = current_step.get("message") or current_step.get("question")
     
-    logger.info(f"[ProcedureGraph] ASK_USER step {state['step_index']}: {question}")
+    logger.info(f"[ProcedureGraph] Asking user: {question}")
     
-    # If we have user input, validate it
-    if state.get('current_user_input'):
-        # Validation logic here
-        valid = validate_user_input(
-            user_input=state['current_user_input'],
-            step=current_step
-        )
-        
-        if not valid:
-            state['validation_attempts'] = state.get('validation_attempts', 0) + 1
-            
-            if state['validation_attempts'] >= MAX_VALIDATION_ATTEMPTS:
-                logger.warning(f"[ProcedureGraph] Max validation attempts reached, falling back to chat")
-                state['fallback_to_chat'] = True
-                
-                # Add message explaining fallback
-                fallback_msg = AIMessage(
-                    content="I'm having trouble understanding that input. Let me connect you with more flexible assistance."
-                )
-                state['messages'].append(fallback_msg)
-                return state
-            
-            # Ask again with clarification
-            retry_msg = AIMessage(
-                content=f"I didn't quite get that. {question}"
-            )
-            state['messages'].append(retry_msg)
-            state['waiting_for_input'] = True
-            return state
-        
-        # Valid input - store and move to next step
-        state['procedure_answers'].append(state['current_user_input'])
-        state['validation_attempts'] = 0  # Reset
-        state['step_index'] += 1
-        state['current_user_input'] = None
-        state['waiting_for_input'] = False
+    # Use interrupt to pause and wait for user input
+    # The value returned from interrupt() will be the user's response
+    user_response = interrupt(question)
     
-    else:
-        # First time asking - just present the question
-        question_msg = AIMessage(content=question)
-        state['messages'].append(question_msg)
-        state['waiting_for_input'] = True
+    logger.info(f"[ProcedureGraph] User responded: {user_response}")
     
-    return state
+    # Store the answer
+    answers = state["answers"].copy()
+    answers.append(user_response)
+    
+    # Move to next step
+    return {
+        **state,
+        "user_input": user_response,
+        "answers": answers,
+        "step_index": state["step_index"] + 1
+    }
 
 def api_call_node(state: ProcedureState) -> ProcedureState:
-    """Handle API_CALL step type"""
-    current_step = state['procedure_steps'][state['step_index']]
+    """
+    Handle API_CALL step - executes the specified action
+    """
+    current_step = state["steps"][state["step_index"]]
     action_id = current_step.get("action_id")
     
-    logger.info(f"[ProcedureGraph] API_CALL step {state['step_index']}: action_id={action_id}")
+    logger.info(f"[ProcedureGraph] Executing API call: {action_id}")
     
     if not action_id:
-        state['last_api_output'] = "Error: No action_id specified"
-        state['step_index'] += 1
-        return state
+        logger.error(f"[ProcedureGraph] No action_id specified in step")
+        return {
+            **state,
+            "api_output": "Error: No action_id specified",
+            "step_index": state["step_index"] + 1
+        }
     
     try:
+        # Get the tool for this action
         selected_tool = action(action_id)
+        
         if selected_tool is None:
             raise ValueError(f"action() returned None for action_id={action_id}")
         
+        logger.info(f"[ProcedureGraph] Using tool: {selected_tool.name}")
+        
+        # Create agent with the tool
         prompt = ChatPromptTemplate.from_messages([
             ("system", "You are a helpful assistant. Use the provided tool to complete the task."),
             ("human", "{input}"),
@@ -163,195 +149,128 @@ def api_call_node(state: ProcedureState) -> ProcedureState:
         # Build context from previous steps
         input_text = f"""
 Execute the tool `{selected_tool.name}` using the following context:
-- Action ID: {action_id}
-- Current User Input: {state.get('current_user_input')}
-- Previous API Output: {state.get('last_api_output')}
-- All Previous Answers: {state.get('procedure_answers', [])}
+
+Action ID: {action_id}
+Current User Input: {state.get('user_input')}
+Previous API Output: {state.get('api_output')}
+All Previous Answers: {state.get('answers', [])}
 
 Use the tool with appropriate parameters based on this context.
         """
         
+        # Execute the tool
         result = agent_executor.invoke({"input": input_text})
         output = result.get("output", str(result))
         
-        state['last_api_output'] = output
-        state['step_index'] += 1
-        
         logger.info(f"[ProcedureGraph] API call successful: {output[:100]}...")
+        
+        return {
+            **state,
+            "api_output": output,
+            "step_index": state["step_index"] + 1
+        }
         
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
         logger.error(f"[ProcedureGraph] API call error: {error_details}")
         
-        state['last_api_output'] = f"Error calling {action_id}: {str(e)}"
-        state['fallback_to_chat'] = True
-    
-    return state
+        return {
+            **state,
+            "api_output": f"Error calling {action_id}: {str(e)}",
+            "step_index": state["step_index"] + 1
+        }
 
 def final_response_node(state: ProcedureState) -> ProcedureState:
-    """Generate final response for completed procedure"""
+    """
+    Generate final response using response_statement function
+    """
     logger.info(f"[ProcedureGraph] Generating final response")
     
     try:
-        from response_statement import response_statement
-        
-        result = response_statement(
-            user_input=state.get('current_user_input'),
-            api_output=state.get('last_api_output'),
-            answers=state.get('procedure_answers', [])
+        # Use your response_statement function
+        final_text = response_statement(
+            user_input=state.get("user_input"),
+            api_output=state.get("api_output"),
+            answers=state.get("answers", [])
         )
         
-        # Add final response
-        final_msg = AIMessage(content=result)
-        state['messages'].append(final_msg)
+        logger.info(f"[ProcedureGraph] Final response generated: {final_text[:100]}...")
         
-        # Mark procedure as complete
-        state['in_procedure'] = False
-        state['waiting_for_input'] = False
-        
-        logger.info(f"[ProcedureGraph] Procedure completed successfully")
+        return {
+            **state,
+            "final_response": final_text
+        }
         
     except Exception as e:
-        logger.error(f"[ProcedureGraph] Error in final response: {e}")
-        error_msg = AIMessage(
-            content="I apologize, but I encountered an error completing this procedure."
-        )
-        state['messages'].append(error_msg)
-        state['fallback_to_chat'] = True
-    
-    return state
-
-# ============================================================================
-# VALIDATION HELPER
-# ============================================================================
-
-def validate_user_input(user_input: str, step: Dict[str, Any]) -> bool:
-    """
-    Validate user input for a step
-    Can be extended with specific validation rules per step type
-    """
-    if not user_input or not user_input.strip():
-        return False
-    
-    # Add more validation logic based on step requirements
-    validation_rules = step.get('validation_rules', {})
-    
-    if validation_rules.get('min_length'):
-        if len(user_input) < validation_rules['min_length']:
-            return False
-    
-    if validation_rules.get('expected_type') == 'number':
-        try:
-            float(user_input)
-        except ValueError:
-            return False
-    
-    # Add more validation as needed
-    
-    return True
-
-# ============================================================================
-# ROUTING
-# ============================================================================
-
-def procedure_router(state: ProcedureState) -> str:
-    """Route to appropriate procedure step or end"""
-    
-    # Check for fallback first
-    if state.get('fallback_to_chat'):
-        logger.info(f"[ProcedureGraph] Routing to fallback")
-        return "end"
-    
-    # Check if waiting for user input
-    if state.get('waiting_for_input'):
-        logger.info(f"[ProcedureGraph] Waiting for user input")
-        return "end"  # Pause and wait for next request
-    
-    # Check if procedure is complete
-    if not state.get('in_procedure'):
-        logger.info(f"[ProcedureGraph] Procedure complete")
-        return "end"
-    
-    # Determine next step
-    idx = state.get('step_index', 0)
-    steps = state.get('procedure_steps', [])
-    
-    if idx >= len(steps):
-        logger.info(f"[ProcedureGraph] All steps processed, generating final response")
-        return "final_response"
-    
-    step = steps[idx]
-    step_type = step.get('type')
-    
-    logger.info(f"[ProcedureGraph] Next step type: {step_type}")
-    
-    if step_type == "ASK_USER":
-        return "ask_user"
-    elif step_type == "API_CALL":
-        return "api_call"
-    elif step_type == "RESPOND_FINAL":
-        return "final_response"
-    else:
-        logger.warning(f"[ProcedureGraph] Unknown step type: {step_type}")
-        return "end"
+        logger.error(f"[ProcedureGraph] Error generating final response: {e}")
+        
+        return {
+            **state,
+            "final_response": "I apologize, but I encountered an error completing this procedure. Please try again or contact support."
+        }
 
 # ============================================================================
 # GRAPH BUILDER
 # ============================================================================
 
 def create_procedure_graph(tenant_id: str, mode: str):
-    """Create the procedure graph for step-based workflows"""
+    """
+    Create the procedure graph matching your exact flow
+    
+    Flow:
+    1. route_step → determines which node to execute
+    2. ask_user → uses interrupt() to pause and wait
+    3. api_call → executes the action
+    4. final_response → generates final message
+    """
     start_time = time.perf_counter()
     
     # Create graph
     workflow = StateGraph(ProcedureState)
     
     # Add nodes
-    workflow.add_node("entry", procedure_entry_node)
     workflow.add_node("ask_user", ask_user_node)
     workflow.add_node("api_call", api_call_node)
-    workflow.add_node("final_response", final_response_node)
+    workflow.add_node("final_response_node", final_response_node)
     
-    # Set entry point
-    workflow.set_entry_point("entry")
-    
-    # Add edges
-    workflow.add_conditional_edges(
-        "entry",
-        procedure_router,
+    # Set conditional entry point
+    workflow.set_conditional_entry_point(
+        route_step,
         {
             "ask_user": "ask_user",
             "api_call": "api_call",
-            "final_response": "final_response",
+            "final_response": "final_response_node",
             "end": END
         }
     )
     
+    # Add conditional edges from each node back to router
     workflow.add_conditional_edges(
         "ask_user",
-        procedure_router,
+        route_step,
         {
             "ask_user": "ask_user",
             "api_call": "api_call",
-            "final_response": "final_response",
+            "final_response": "final_response_node",
             "end": END
         }
     )
     
     workflow.add_conditional_edges(
         "api_call",
-        procedure_router,
+        route_step,
         {
             "ask_user": "ask_user",
             "api_call": "api_call",
-            "final_response": "final_response",
+            "final_response": "final_response_node",
             "end": END
         }
     )
     
-    workflow.add_edge("final_response", END)
-    
+    # Final response ends the graph
+    workflow.add_edge("final_response_node", END)
+
     # Choose checkpointer
     if mode == "Ai_agent":
         checkpointer = MongoDBSaver(
@@ -362,8 +281,8 @@ def create_procedure_graph(tenant_id: str, mode: str):
     else:
         checkpointer = MemorySaver()
     
-    # Compile graph
-    graph = workflow.compile(checkpointer=checkpointer)
+    # Compile graph with interrupt support
+    graph = workflow.compile(checkpointer=checkpointer, interrupt_before=["ask_user"])
     
     logger.info(f"[ProcedureGraph] Graph created in {time.perf_counter() - start_time:.3f}s")
     
