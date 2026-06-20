@@ -24,6 +24,13 @@ load_dotenv()
 MONGODB_ATLAS_URI = os.getenv("MONGODB_ATLAS_URI")
 client = MongoClient(MONGODB_ATLAS_URI)
 
+db_name = "rag_bot"
+collection_name = "embeddings"
+
+def mongodb_client():
+   return client[db_name][collection_name]
+
+
 embeddings = AzureOpenAIEmbeddings(
     model="text-embedding-ada-002",
     api_key=os.environ.get("AZURE_OPENAI_KEY"),

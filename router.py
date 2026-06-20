@@ -19,7 +19,7 @@ client = MongoClient(os.getenv("MONGODB_ATLAS_URI"))
 
 checkpointer = MongoDBSaver(
     client=client,
-    db_name="cx_prod"
+    db_name="sample_db"
 )
 
 # --- STATE ---
